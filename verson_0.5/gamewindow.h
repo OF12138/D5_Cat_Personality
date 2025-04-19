@@ -34,6 +34,8 @@ class GameWindow : public QWidget
 public:
     GameWindow(QWidget *parent = nullptr);
 private:
+    QPixmap playerPixmap;
+    QPixmap killerPixmap;
     Entity player;
     std::vector<Entity> survivors;
     Entity killer;
@@ -42,7 +44,6 @@ private:
     Gate gate;
     std::vector<CipherMachine> cipherMachines;
     std::vector<Entity> chairs;
-    std::vector<bool> survivorOnChair;
     std::vector<bool> survivorEscaped;
     bool isFlippingWindow;
     bool isFlippingBoard;

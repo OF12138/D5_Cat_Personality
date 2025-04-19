@@ -31,13 +31,22 @@ void GameWindow::initGame()
     std::uniform_int_distribution<> disX(0, 700);
     std::uniform_int_distribution<> disY(0, 500);
 
+    //加载player.png& killer.png
+    playerPixmap.load(":/images/images/player.png");
+    if (!playerPixmap.isNull())  playerPixmap = playerPixmap.scaled(20, 20, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    killerPixmap.load(":/images/images/killer.png");
+    if(!killerPixmap.isNull()) killerPixmap=killerPixmap.scaled(20,20,Qt::KeepAspectRatio,Qt::SmoothTransformation);
+
     //初始化player,killer其他求生者（人机verson_1.0）
     player={disX(gen),disY(gen),5};
+    isFlippingWindow = false;
+    isFlippingBoard = false;
+    flipWindowTime = 0;
+    flipBoardTime = 0;
     killer = {disX(gen), disY(gen), 3};
     for (int i = 0; i < 3; i++)
     {
         survivors.push_back({disX(gen), disY(gen), 5});
-        survivorOnChair.push_back(false);
         survivorEscaped.push_back(false);
     }
 
@@ -56,12 +65,6 @@ void GameWindow::initGame()
         cm.isBroken = false;
         cipherMachines.push_back(cm);
     }
-
-    //初始化求生者状态
-    isFlippingWindow = false;
-    isFlippingBoard = false;
-    flipWindowTime = 0;
-    flipBoardTime = 0;
 }
 
 // 更新游戏状态
@@ -73,16 +76,97 @@ void GameWindow::updateGame()
     killer.y<player.y?newKiller.y+=killer.speed:newKiller.y-=killer.speed;
     if(!checkCollision(newKiller,player)) killer=newKiller;
 
-    //(更新survivors)其他求生者的简单随机移动逻辑（布朗运动）
-    for (auto &survivor : survivors)
+    // 统计每个密码机正在破译的求生者数量
+    std::vector<int> cipherMachineSurvivorCount(cipherMachines.size(), 0);
+    bool gateBeingDecoded = false;
+
+    //(更新survivors)求生者的逻辑
+    for (size_t i = 0; i < survivors.size(); i++)
     {
-        Entity newSurvivor = survivor;
-        int a=survivor.speed;
-        rand()%2==0?({newSurvivor.x+=a;newSurvivor.y+=a;}):({newSurvivor.x-=a;newSurvivor.y-=a;});
+        if (survivorEscaped[i]) continue;
+        Entity newSurvivor = survivors[i];
         bool canMove = true;
-        if (checkCollision(newSurvivor, killer)||checkCollision(newSurvivor,player)) canMove = false;
-        for (const auto &otherSurvivor : survivors) if (&survivor != &otherSurvivor && checkCollision(newSurvivor, otherSurvivor)) canMove = false;  
-        if (canMove) survivor = newSurvivor;
+        int unbrokenCount = 0;
+        for (const auto& cm : cipherMachines) if (!cm.isBroken) unbrokenCount++;
+        if (unbrokenCount > 0)
+        {
+            // 寻找最近的未破译密码机
+            int closestIndex = -1;
+            int minDistance = INT_MAX;
+            for (size_t j = 0; j < cipherMachines.size(); ++j)
+            {
+                if (!cipherMachines[j].isBroken)
+                {
+                    int distance = std::abs(survivors[i].x - cipherMachines[j].entity.x) + std::abs(survivors[i].y - cipherMachines[j].entity.y);
+                    if (distance < minDistance && cipherMachineSurvivorCount[j] < 4)
+                    {
+                        minDistance = distance;
+                        closestIndex = j;
+                    }
+                }
+            }
+
+            if (closestIndex != -1)
+            {
+                // 朝最近的密码机移动
+                if (survivors[i].x < cipherMachines[closestIndex].entity.x) newSurvivor.x += survivors[i].speed;
+                else if (survivors[i].x > cipherMachines[closestIndex].entity.x) newSurvivor.x -= survivors[i].speed;
+                if (survivors[i].y < cipherMachines[closestIndex].entity.y) newSurvivor.y += survivors[i].speed;
+                else if (survivors[i].y > cipherMachines[closestIndex].entity.y) newSurvivor.y -= survivors[i].speed;
+
+                // 检查是否可以破译密码机
+                if (std::abs(survivors[i].x - cipherMachines[closestIndex].entity.x) < 50 && std::abs(survivors[i].y - cipherMachines[closestIndex].entity.y) < 50)
+                {
+                    // 可以破译，增加进度
+                    cipherMachineSurvivorCount[closestIndex]++;
+                    int speedBoost = cipherMachineSurvivorCount[closestIndex];
+                    cipherMachines[closestIndex].progress += speedBoost;
+                    if (cipherMachines[closestIndex].progress >= 100) cipherMachines[closestIndex].isBroken = true;
+                    canMove = false;
+                }
+            }
+        }
+        else if (!gate.isOpen)
+        {
+            // 所有密码机已破译，前往破译大门
+            if (survivors[i].x < gate.entity.x) newSurvivor.x += survivors[i].speed;
+            else if (survivors[i].x > gate.entity.x) newSurvivor.x -= survivors[i].speed;
+            if (survivors[i].y < gate.entity.y) newSurvivor.y += survivors[i].speed;
+            else if (survivors[i].y > gate.entity.y) newSurvivor.y -= survivors[i].speed;
+
+            // 检查是否可以破译大门
+            if (std::abs(survivors[i].x - gate.entity.x) < 50 && std::abs(survivors[i].y - gate.entity.y) < 50 && !gateBeingDecoded)
+            {
+                // 可以破译，增加进度
+                gate.progress += 2;
+                if (gate.progress >= 100) gate.isOpen = true;
+                gateBeingDecoded = true;
+                canMove = false;
+            }
+        }
+        else
+        {
+            // 大门已开启，前往逃脱
+            if (survivors[i].x < gate.entity.x) newSurvivor.x += survivors[i].speed;
+            else if (survivors[i].x > gate.entity.x) newSurvivor.x -= survivors[i].speed;
+            if (survivors[i].y < gate.entity.y) newSurvivor.y += survivors[i].speed;
+            else if (survivors[i].y > gate.entity.y) newSurvivor.y -= survivors[i].speed;
+
+            // 检查是否逃脱
+            if (checkCollision(newSurvivor, gate.entity))
+            {
+                survivorEscaped[i] = true;
+                canMove = false;
+            }
+        }
+
+        // 碰撞检测
+        if (canMove)
+        {
+            if (checkCollision(newSurvivor, killer) || checkCollision(newSurvivor, player)) canMove = false;
+            for (const auto& otherSurvivor : survivors) if (&survivors[i] != &otherSurvivor && checkCollision(newSurvivor, otherSurvivor)) canMove = false;
+            if (canMove) survivors[i] = newSurvivor;
+        }
     }
 
     //(更新player)处理翻窗，翻板
@@ -117,16 +201,15 @@ void GameWindow::moveToOtherSide(Entity& entity, const Entity& obstacle,int len=
 void GameWindow::paintEvent(QPaintEvent *event)
 {
     QPainter painter(this);  // 创建绘图对象
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true); // 开启图片平滑渲染
     QPen pen(Qt::black);  // 创建画笔，颜色为黑色
     painter.setPen(pen);  // 设置画笔
 
     // 绘制player&survivors
-    if (!survivorEscaped[0])  painter.drawRect(player.x, player.y, 20, 20);
+    if (!survivorEscaped[0])  painter.drawPixmap(player.x, player.y, playerPixmap);
     for (size_t i = 0; i < survivors.size(); i++)
     {
-        if (survivorOnChair[i])  painter.setBrush(Qt::red);  // 上椅的求生者用红色填充
-        else if (survivorEscaped[i]) continue;
-        else continue;
+        if (survivorEscaped[i]) continue;
         painter.drawRect(survivors[i].x, survivors[i].y, 20, 20);
         painter.setBrush(Qt::NoBrush);
     }
@@ -134,7 +217,7 @@ void GameWindow::paintEvent(QPaintEvent *event)
     // 绘制killer
     QBrush killerBrush(Qt::red);
     painter.setBrush(killerBrush);
-    painter.drawRect(killer.x, killer.y, 20, 20);
+    painter.drawPixmap(killer.x, killer.y, killerPixmap);
     painter.setBrush(Qt::NoBrush);
 
     // 绘制窗户
@@ -211,7 +294,6 @@ void GameWindow::paintEvent(QPaintEvent *event)
     for (size_t i = 0; i < survivors.size(); i++)
     {
         if (survivorEscaped[i]) survivorStatus += "逃脱 ";
-        else if (survivorOnChair[i]) survivorStatus += "上椅 ";
         else survivorStatus += "参与 ";
     }
     painter.drawText(10, 40, survivorStatus);
@@ -305,7 +387,7 @@ void GameWindow::keyPressEvent(QKeyEvent *event)
         {
             if (std::abs(player.x - cm.entity.x) < 50 && std::abs(player.y - cm.entity.y) < 50 &&!cm.isBroken)
             {
-                cm.progress += 10;
+                cm.progress += 2;
                 if (cm.progress >= 100) cm.isBroken = true;
             }
         }
@@ -314,7 +396,7 @@ void GameWindow::keyPressEvent(QKeyEvent *event)
         for (const auto& cm : cipherMachines) if (!cm.isBroken) unbrokenCount++;
         if (unbrokenCount == 0 && std::abs(player.x - gate.entity.x) < 50 && std::abs(player.y - gate.entity.y) < 50 && !gate.isOpen)
         {
-            gate.progress += 10;
+            gate.progress += 5;
             if (gate.progress >= 100) gate.isOpen = true;
         }
 
